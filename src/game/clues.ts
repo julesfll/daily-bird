@@ -10,21 +10,6 @@ import {
 
 export const MAX_GUESSES = 6;
 
-/** Mass thresholds (grams) separating the five size buckets. */
-const SIZE_THRESHOLDS: Array<[SizeBucket, number]> = [
-  ['XS', 20],
-  ['S', 100],
-  ['M', 500],
-  ['L', 2000],
-];
-
-export function massToBucket(grams: number): SizeBucket {
-  for (const [bucket, ceiling] of SIZE_THRESHOLDS) {
-    if (grams < ceiling) return bucket;
-  }
-  return 'XL';
-}
-
 function sizeRank(bucket: SizeBucket): number {
   return SIZE_BUCKETS.indexOf(bucket);
 }

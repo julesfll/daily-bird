@@ -9,15 +9,6 @@ export const SIZE_LABELS: Record<SizeBucket, string> = {
   XL: 'Huge',
 };
 
-/** Mass ranges each bucket covers, for the reveal/legend copy. */
-export const SIZE_RANGES: Record<SizeBucket, string> = {
-  XS: 'under 20 g',
-  S: '20–100 g',
-  M: '100–500 g',
-  L: '500 g – 2 kg',
-  XL: 'over 2 kg',
-};
-
 export type Continent =
   | 'North America'
   | 'South America'
@@ -75,6 +66,12 @@ export interface SpeciesFile {
   poolOrder: number[];
   /** Which clues this dataset can support (a clue is hidden if unavailable). */
   clues: { color: boolean };
+  /**
+   * Mass range each bucket covers, as display copy. The pipeline picks the
+   * thresholds from the pool's own distribution and emits the labels here, so
+   * the client never hardcodes a number that could drift out of date.
+   */
+  sizeRanges: Record<SizeBucket, string>;
   species: Species[];
 }
 

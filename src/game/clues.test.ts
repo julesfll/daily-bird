@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bearingBetween, compassToDegrees, evaluateGuess, massToBucket } from './clues';
+import { bearingBetween, compassToDegrees, evaluateGuess } from './clues';
 import type { Species } from './types';
 
 function species(overrides: Partial<Species> = {}): Species {
@@ -21,21 +21,6 @@ function species(overrides: Partial<Species> = {}): Species {
     ...overrides,
   };
 }
-
-describe('massToBucket', () => {
-  it('maps masses onto the five buckets at the documented thresholds', () => {
-    expect(massToBucket(5)).toBe('XS');
-    expect(massToBucket(19.9)).toBe('XS');
-    expect(massToBucket(20)).toBe('S');
-    expect(massToBucket(99)).toBe('S');
-    expect(massToBucket(100)).toBe('M');
-    expect(massToBucket(499)).toBe('M');
-    expect(massToBucket(500)).toBe('L');
-    expect(massToBucket(1999)).toBe('L');
-    expect(massToBucket(2000)).toBe('XL');
-    expect(massToBucket(9000)).toBe('XL');
-  });
-});
 
 describe('bearingBetween', () => {
   const origin = { lat: 0, lon: 0 };
