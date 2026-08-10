@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.DS_Store
+*.local
+.vite/
+
+# Pipeline working files — only the built species.json is committed
+pipeline/.cache/
+pipeline/raw/
+__pycache__/
+*.pyc
+.venv/
