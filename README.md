@@ -105,11 +105,23 @@ npm run build    # production build into dist/
 
 ## Deployment
 
-Push to `main`. GitHub Actions runs the tests, verifies the dataset, builds, and
-publishes to GitHub Pages. Nothing else to do.
+### One-time setup (required once, ~30 seconds)
 
-If the first run fails at the "configure-pages" step, set
-**Settings → Pages → Source** to **GitHub Actions** once and re-run it.
+GitHub Pages has to be switched on by a repository admin — an Actions workflow
+cannot enable it for you (`configure-pages` fails with *"Create Pages site
+failed: Resource not accessible by integration"*, which is what the first run
+here did).
+
+1. Go to **Settings → Pages**.
+2. Under **Build and deployment → Source**, choose **GitHub Actions**.
+3. Go to the **Actions** tab, open the most recent *Deploy* run, and click
+   **Re-run all jobs**.
+
+### After that
+
+Push to `main`. GitHub Actions runs the tests, rebuilds the dataset and fails if
+the committed `species.json` differs, builds the site, and publishes it. Nothing
+else to do, ever.
 
 ## Not in this version
 
