@@ -1,0 +1,5 @@
+# Only needed for `--source avonet`. The curated build uses the standard library.
+pandas>=2.0
+openpyxl>=3.1      # reading the AVONET .xlsx
+geopandas>=1.0     # continent lookup from range centroids
+shapely>=2.0

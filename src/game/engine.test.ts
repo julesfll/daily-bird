@@ -92,6 +92,7 @@ describe('daily rotation', () => {
     launchDate: '2026-08-10',
     poolOrder: [2, 0, 1],
     clues: { color: true },
+    sizeRanges: { XS: '', S: '', M: '', L: '', XL: '' },
     species: [species(10), species(11), species(12)],
   };
 
