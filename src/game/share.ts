@@ -1,4 +1,4 @@
-import { MAX_GUESSES } from './clues';
+import { GUESS_LIMIT } from '../config';
 import type { GameState, GuessResult, SpeciesFile } from './types';
 
 const COMPASS_ARROWS: Record<string, string> = {
@@ -41,10 +41,19 @@ function rowFor(guess: GuessResult, showColor: boolean): string {
 export function buildShareText(
   state: GameState,
   file: SpeciesFile,
-  puzzleNo: number,
+  title: string,
   url: string,
+  limit: number | null = GUESS_LIMIT,
 ): string {
-  const score = state.status === 'won' ? `${state.guesses.length}/${MAX_GUESSES}` : `X/${MAX_GUESSES}`;
+  const used = state.guesses.length;
+  const score =
+    limit === null
+      ? state.status === 'won'
+        ? `${used} ${used === 1 ? 'guess' : 'guesses'}`
+        : 'gave up'
+      : state.status === 'won'
+        ? `${used}/${limit}`
+        : `X/${limit}`;
   const grid = state.guesses.map((g) => rowFor(g, file.clues.color)).join('\n');
-  return [`Daily Bird #${puzzleNo} ${score}`, '', grid, '', url].join('\n');
+  return [`${title} ${score}`, '', grid, '', url].join('\n');
 }

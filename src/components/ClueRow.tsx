@@ -8,23 +8,53 @@ interface Props {
   sizeRanges: Record<SizeBucket, string>;
 }
 
+type Tone = 'hit' | 'miss' | 'hint';
+
 interface ChipProps {
   label: string;
   value: string;
-  tone: 'hit' | 'miss' | 'hint';
-  title?: string;
+  tone: Tone;
+  /**
+   * Symbol shown before the value so the state reads without colour. Omitted
+   * where the value already carries its own symbol, such as the compass arrow.
+   */
+  mark?: React.ReactNode;
+  title: string;
   children?: React.ReactNode;
 }
 
-function Chip({ label, value, tone, title, children }: ChipProps) {
-  const className = tone === 'hit' ? 'chip is-hit' : tone === 'hint' ? 'chip is-hint' : 'chip';
+function Chip({ label, value, tone, mark, title, children }: ChipProps) {
+  const className =
+    tone === 'hit' ? 'chip is-hit' : tone === 'hint' ? 'chip is-hint' : 'chip';
   return (
-    <div className={className} title={title ?? `${label}: ${value}`}>
+    <div className={className} title={title}>
       <span className="chip-label">{label}</span>
       <span className="chip-value">
+        {mark && (
+          <span className="chip-mark" aria-hidden="true">
+            {mark}
+          </span>
+        )}
         {children ?? value}
       </span>
     </div>
+  );
+}
+
+/** A plain match/no-match clue. */
+function matchChip(label: string, value: string, matched: boolean) {
+  return (
+    <Chip
+      label={label}
+      value={value}
+      tone={matched ? 'hit' : 'miss'}
+      mark={matched ? '✓' : '✗'}
+      title={
+        matched
+          ? `${label} matches: ${value}`
+          : `${label} is not ${value}`
+      }
+    />
   );
 }
 
@@ -32,31 +62,39 @@ export function ClueRow({ result, species, showColor, sizeRanges }: Props) {
   const { region, size } = result;
 
   const regionChip = region.match ? (
-    <Chip label="Region" value={region.continent} tone="hit" />
+    <Chip
+      label="Region"
+      value={region.continent}
+      tone="hit"
+      mark="✓"
+      title={`Right region: ${region.continent}`}
+    />
   ) : region.wideRange ? (
     <Chip
       label="Region"
-      value="Wide"
+      value="Worldwide"
       tone="hint"
-      title="The target ranges across so much of the world that a direction would not help"
+      mark="🌍"
+      title="Today's bird ranges across so much of the world that a direction would not narrow it down"
     />
   ) : (
     <Chip
       label="Region"
       value={region.compass}
       tone="hint"
-      title={`The target's range lies to the ${region.compass}`}
-    >
-      <span
-        className="arrow"
-        style={{ transform: `rotate(${compassToDegrees(region.compass)}deg)` }}
-        aria-hidden="true"
-      >
-        ⬆
-      </span>{' '}
-      {region.compass}
-    </Chip>
+      mark={
+        <span
+          className="arrow"
+          style={{ transform: `rotate(${compassToDegrees(region.compass)}deg)` }}
+        >
+          ⬆
+        </span>
+      }
+      title={`Wrong region — today's bird lives to the ${region.compass} of ${species.continent}`}
+    />
   );
+
+  const sizeCorrect = size.result === 'correct';
 
   return (
     <div className={result.correct ? 'clue-row is-correct' : 'clue-row'}>
@@ -68,32 +106,23 @@ export function ClueRow({ result, species, showColor, sizeRanges }: Props) {
         <span className="sci">{species.sci}</span>
       </div>
       <div className="chips" style={{ ['--chip-count' as string]: showColor ? 5 : 4 }}>
-        {showColor && (
-          <Chip
-            label="Colour"
-            value={species.color}
-            tone={result.color.match ? 'hit' : 'miss'}
-          />
-        )}
+        {showColor && matchChip('Colour', species.color, result.color.match)}
         <Chip
           label="Size"
           value={SIZE_LABELS[size.value]}
-          tone={size.result === 'correct' ? 'hit' : 'hint'}
-          title={`${SIZE_LABELS[size.value]} (${sizeRanges[size.value]}) — the target is ${
-            size.result === 'correct' ? 'the same size' : size.result
-          }`}
-        >
-          {size.result === 'correct'
-            ? SIZE_LABELS[size.value]
-            : `${SIZE_LABELS[size.value]} ${size.result === 'bigger' ? '▲' : '▼'}`}
-        </Chip>
-        <Chip
-          label="Habitat"
-          value={species.habitat}
-          tone={result.habitat.match ? 'hit' : 'miss'}
+          tone={sizeCorrect ? 'hit' : 'hint'}
+          mark={sizeCorrect ? '✓' : size.result === 'bigger' ? '▲' : '▼'}
+          title={
+            sizeCorrect
+              ? `Right size: ${SIZE_LABELS[size.value]} (${sizeRanges[size.value]})`
+              : `Today's bird is ${size.result} than ${SIZE_LABELS[size.value]} (${
+                  sizeRanges[size.value]
+                })`
+          }
         />
+        {matchChip('Habitat', species.habitat, result.habitat.match)}
         {regionChip}
-        <Chip label="Family" value={species.family} tone={result.family.match ? 'hit' : 'miss'} />
+        {matchChip('Family', species.family, result.family.match)}
       </div>
     </div>
   );

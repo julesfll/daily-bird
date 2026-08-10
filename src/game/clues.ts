@@ -8,6 +8,10 @@ import {
   type Species,
 } from './types';
 
+/**
+ * The standard daily cap. The live limit comes from GUESS_LIMIT in config.ts;
+ * this is the width of the stats histogram and the value to restore there.
+ */
 export const MAX_GUESSES = 6;
 
 function sizeRank(bucket: SizeBucket): number {

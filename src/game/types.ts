@@ -98,4 +98,9 @@ export interface GameState {
   date: string;
   guesses: GuessResult[];
   status: GameStatus;
+  /**
+   * Only set in free play, where the bird is picked at random and so cannot be
+   * re-derived from the date the way the daily puzzle can.
+   */
+  targetId?: number;
 }

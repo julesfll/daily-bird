@@ -6,6 +6,13 @@ traits — colour, size, habitat, region, and family.
 
 **Play: https://julesfll.github.io/daily-bird/**
 
+> **Currently in practice mode.** The daily puzzle and the six-guess cap are
+> temporarily switched off: you get a random bird, unlimited guesses, and a
+> *New bird* button. Both are single flags in [`src/config.ts`](src/config.ts) —
+> set `DAILY_MODE = true` and `GUESS_LIMIT = 6` to restore the daily game.
+> Streaks and the countdown are hidden while practice mode is on, because
+> neither means anything without a once-a-day puzzle.
+
 ## How it works
 
 The whole game is a static site. There is no server, no account, and no

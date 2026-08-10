@@ -8,12 +8,18 @@
   --line: #d8d2c4;
   --accent: #2f6f4e;
   --accent-ink: #ffffff;
-  --hit: #3f8f5f;
-  --hit-bg: #e3f1e6;
-  --miss: #b0ab9c;
-  --miss-bg: #ece8dd;
-  --hint: #b8792a;
-  --hint-bg: #f8ecda;
+  /* Three clue states that have to be told apart at a glance. The old palette
+     was three muted earth tones; these are separated by hue AND lightness, and
+     every chip also carries a symbol so colour is never the only signal. */
+  --hit: #0f6538;
+  --hit-bg: #d3efdd;
+  --hit-line: #8ccfa8;
+  --hint: #8a5300;
+  --hint-bg: #ffedc4;
+  --hint-line: #e6bd6c;
+  --miss: #565a5f;
+  --miss-bg: #e5e7ea;
+  --miss-line: #c2c6cb;
   --radius: 12px;
   --shadow: 0 1px 2px rgb(35 41 31 / 0.06), 0 4px 16px rgb(35 41 31 / 0.05);
   color-scheme: light;
@@ -30,12 +36,15 @@
     --line: #2f3626;
     --accent: #58a97a;
     --accent-ink: #0f1209;
-    --hit: #6cc48c;
-    --hit-bg: #1c3325;
-    --miss: #5d6352;
-    --miss-bg: #23281c;
-    --hint: #d9a355;
-    --hint-bg: #33280f;
+    --hit: #74d79c;
+    --hit-bg: #123723;
+    --hit-line: #2c6b46;
+    --hint: #f3bd5e;
+    --hint-bg: #3c2c0c;
+    --hint-line: #7a5c1c;
+    --miss: #a9aeb5;
+    --miss-bg: #292c30;
+    --miss-line: #414650;
     --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 4px 16px rgb(0 0 0 / 0.25);
     color-scheme: dark;
   }
@@ -264,10 +273,11 @@ button {
 
 .chip {
   border-radius: 8px;
-  padding: 0.35rem 0.15rem;
+  padding: 0.35rem 0.25rem;
   text-align: center;
   background: var(--miss-bg);
-  color: var(--ink-soft);
+  color: var(--miss);
+  border: 1px solid var(--miss-line);
   min-width: 0;
 }
 
@@ -276,8 +286,14 @@ button {
   font-size: 0.58rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--ink-faint);
+  opacity: 0.75;
   margin-bottom: 0.1rem;
+}
+
+/* Redundant with colour, so the clue still reads without it. */
+.chip .chip-mark {
+  font-weight: 700;
+  margin-right: 0.15rem;
 }
 
 /* Wraps to two lines rather than ellipsizing: on a phone there is no hover to
@@ -298,11 +314,13 @@ button {
 .chip.is-hit {
   background: var(--hit-bg);
   color: var(--hit);
+  border-color: var(--hit-line);
 }
 
 .chip.is-hint {
   background: var(--hint-bg);
   color: var(--hint);
+  border-color: var(--hint-line);
 }
 
 .arrow {
@@ -521,6 +539,31 @@ button {
 
 .help li {
   margin-bottom: 0.3rem;
+}
+
+.help .legend {
+  list-style: none;
+  padding: 0;
+  margin: 0.75rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.help .legend li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.legend-chip {
+  flex: 0 0 auto;
+  padding: 0.2rem 0.45rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 /* ---------- footer ---------- */

@@ -4,34 +4,65 @@ import { Countdown } from './components/Countdown';
 import { GuessInput } from './components/GuessInput';
 import { RevealCard } from './components/RevealCard';
 import { StatsPanel } from './components/StatsPanel';
-import { MAX_GUESSES } from './game/clues';
-import { puzzleNumber, targetForDate, todayUTC } from './game/daily';
-import { giveUp, newGame, submitGuess } from './game/engine';
+import { DAILY_MODE, GUESS_LIMIT } from './config';
+import { puzzleNumber, randomTarget, targetForDate, todayUTC } from './game/daily';
+import { giveUp, guessesRemaining, newGame, submitGuess } from './game/engine';
 import { buildShareText } from './game/share';
 import type { GameState, Species, SpeciesFile } from './game/types';
 import { computeStats, load, recordResult, save, type Store } from './storage';
 
 const SHARE_URL = 'https://julesfll.github.io/daily-bird/';
 
+/**
+ * History is keyed by puzzle date and its distribution assumes a guess cap, so
+ * free-play rounds are deliberately not recorded — several a day would collide,
+ * and an unlimited round has no bucket to land in.
+ */
+function finish(store: Store, state: GameState): Store {
+  return DAILY_MODE ? recordResult(store, state) : store;
+}
+
 function Help() {
   return (
     <div className="help">
       <h2>How to play</h2>
       <p>
-        Everyone gets the same bird each day. You have {MAX_GUESSES} guesses; each one is scored
-        against today’s bird on five traits.
+        {DAILY_MODE
+          ? 'Everyone gets the same bird each day. '
+          : 'Guess the mystery bird. '}
+        {GUESS_LIMIT === null
+          ? 'Guess as many times as you like — '
+          : `You have ${GUESS_LIMIT} guesses — `}
+        each one is scored against the answer on five traits.
       </p>
+      <ul className="legend">
+        <li>
+          <span className="chip is-hit legend-chip">
+            <span className="chip-mark">✓</span> match
+          </span>
+          the answer shares this trait with your guess
+        </li>
+        <li>
+          <span className="chip is-hint legend-chip">
+            <span className="chip-mark">▲</span> ▼ → 🌍
+          </span>
+          not a match, but the symbol points you towards the answer
+        </li>
+        <li>
+          <span className="chip legend-chip">
+            <span className="chip-mark">✗</span> no
+          </span>
+          the answer does not share this trait
+        </li>
+      </ul>
       <ul>
         <li>
-          <strong>Colour, Habitat, Family</strong> — green when they match.
+          <strong>Size</strong> — ▲ the answer is bigger than your guess, ▼ smaller.
         </li>
         <li>
-          <strong>Size</strong> — ▲ means today’s bird is bigger than your guess, ▼ smaller.
-        </li>
-        <li>
-          <strong>Region</strong> — green on the right continent, otherwise an arrow pointing the
-          way. Birds found across much of the world show <em>Wide</em> instead, because a direction
-          would be meaningless.
+          <strong>Region</strong> — an arrow points from your guess’s range towards the
+          answer’s. 🌍 means the answer lives across so much of the world that a direction
+          would not narrow it down.
         </li>
       </ul>
     </div>
@@ -57,19 +88,30 @@ export function App() {
       .catch(() => setFailed(true));
   }, []);
 
-  const target = useMemo(
-    () => (file ? targetForDate(file, date) : null),
-    [file, date],
-  );
+  // In daily mode a stored game from an earlier day is stale. In free play the
+  // stored game is always the current one — it ends only when you start another.
+  const game: GameState = useMemo(() => {
+    if (store.game && (!DAILY_MODE || store.game.date === date)) return store.game;
+    return newGame(date, DAILY_MODE || !file ? undefined : randomTarget(file).id);
+  }, [store.game, date, file]);
 
-  // A stored game from an earlier day is stale: start the new one instead.
-  const game: GameState =
-    store.game && store.game.date === date ? store.game : newGame(date);
+  const target = useMemo(() => {
+    if (!file) return null;
+    if (DAILY_MODE) return targetForDate(file, date);
+    return game.targetId === undefined ? null : file.species[game.targetId];
+  }, [file, date, game.targetId]);
 
   const persist = useCallback((next: Store) => {
     setStore(next);
     save(next);
   }, []);
+
+  const onNewBird = useCallback(() => {
+    if (!file) return;
+    setNote('');
+    setShareLabel('Share');
+    persist({ ...store, game: newGame(todayUTC(), randomTarget(file).id) });
+  }, [file, persist, store]);
 
   const onGuess = useCallback(
     (guess: Species) => {
@@ -81,12 +123,16 @@ export function App() {
         return;
       }
       if (outcome.kind === 'rejected') {
-        setNote('Today’s game is over — come back after midnight UTC.');
+        setNote(
+          DAILY_MODE
+            ? 'Today’s game is over — come back after midnight UTC.'
+            : 'This round is over — start a new bird.',
+        );
         return;
       }
 
       setNote('');
-      persist(recordResult({ ...store, game: outcome.state }, outcome.state));
+      persist(finish({ ...store, game: outcome.state }, outcome.state));
     },
     [game, target, persist, store],
   );
@@ -94,7 +140,7 @@ export function App() {
   const onGiveUp = useCallback(() => {
     const next = giveUp(game);
     setNote('');
-    persist(recordResult({ ...store, game: next }, next));
+    persist(finish({ ...store, game: next }, next));
   }, [game, persist, store]);
 
   const onRollover = useCallback(() => {
@@ -104,7 +150,10 @@ export function App() {
 
   const onShare = useCallback(async () => {
     if (!file) return;
-    const text = buildShareText(game, file, puzzleNumber(date, file.launchDate), SHARE_URL);
+    const title = DAILY_MODE
+      ? `Daily Bird #${puzzleNumber(date, file.launchDate)}`
+      : 'Daily Bird (practice)';
+    const text = buildShareText(game, file, title, SHARE_URL);
     try {
       if (navigator.share) {
         await navigator.share({ text });
@@ -139,7 +188,15 @@ export function App() {
   const finished = game.status !== 'in_progress';
   const stats = computeStats(store, date);
   const usedIds = new Set(game.guesses.map((g) => g.speciesId));
-  const remaining = MAX_GUESSES - game.guesses.length;
+  const remaining = guessesRemaining(game);
+  const used = game.guesses.length;
+
+  const counter =
+    remaining === null
+      ? used === 0
+        ? 'Unlimited guesses'
+        : `${used} ${used === 1 ? 'guess' : 'guesses'} so far`
+      : `${remaining} ${remaining === 1 ? 'guess' : 'guesses'} left`;
 
   return (
     <div className="app">
@@ -147,7 +204,7 @@ export function App() {
         <div>
           <h1>Daily Bird</h1>
           <span className="puzzle-no">
-            #{puzzleNumber(date, file.launchDate)} · {date}
+            {DAILY_MODE ? `#${puzzleNumber(date, file.launchDate)} · ${date}` : 'Practice mode'}
           </span>
         </div>
         <button
@@ -168,7 +225,7 @@ export function App() {
           usedIds={usedIds}
           disabled={finished}
           onGuess={onGuess}
-          note={note || `${remaining} ${remaining === 1 ? 'guess' : 'guesses'} left`}
+          note={note || counter}
         />
       )}
 
@@ -193,27 +250,39 @@ export function App() {
             sizeRanges={file.sizeRanges}
           />
           <div className="actions">
-            <button className="primary" onClick={onShare}>
+            {!DAILY_MODE && (
+              <button className="primary" onClick={onNewBird}>
+                New bird
+              </button>
+            )}
+            <button className={DAILY_MODE ? 'primary' : ''} onClick={onShare}>
               {shareLabel}
             </button>
           </div>
-          <StatsPanel
-            stats={stats}
-            todayGuesses={game.status === 'won' ? game.guesses.length : null}
-          />
+          {DAILY_MODE && (
+            <StatsPanel
+              stats={stats}
+              todayGuesses={game.status === 'won' ? game.guesses.length : null}
+            />
+          )}
         </>
       )}
 
       {!finished && game.guesses.length > 0 && (
         <div className="actions">
           <button onClick={onGiveUp}>Give up</button>
+          {!DAILY_MODE && <button onClick={onNewBird}>Skip to a new bird</button>}
         </div>
       )}
 
-      <Countdown onRollover={onRollover} />
+      {DAILY_MODE && <Countdown onRollover={onRollover} />}
 
       <footer className="footer">
-        <p>A new bird every day at midnight UTC.</p>
+        <p>
+          {DAILY_MODE
+            ? 'A new bird every day at midnight UTC.'
+            : 'Practice mode: a random bird, unlimited guesses.'}
+        </p>
         <p>
           Bird photos and articles from{' '}
           <a href="https://en.wikipedia.org" target="_blank" rel="noreferrer noopener">

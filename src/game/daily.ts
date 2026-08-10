@@ -37,6 +37,11 @@ export function targetForDate(file: SpeciesFile, date: string): Species {
   return target;
 }
 
+/** A bird at random, for free play. */
+export function randomTarget(file: SpeciesFile): Species {
+  return file.species[Math.floor(Math.random() * file.species.length)];
+}
+
 /** Milliseconds until the next UTC midnight, for the countdown. */
 export function msUntilRollover(now: Date = new Date()): number {
   const next = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
