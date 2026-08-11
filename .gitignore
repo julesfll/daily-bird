@@ -7,6 +7,8 @@ dist/
 # Pipeline working files — only the built species.json is committed
 pipeline/.cache/
 pipeline/raw/
+# ...except the source workbooks, kept so the enrichment can be re-run.
+!pipeline/raw/*.xlsx
 __pycache__/
 *.pyc
 .venv/

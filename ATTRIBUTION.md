@@ -7,11 +7,14 @@ geographical data for all birds*, Ecology Letters 25: 581–597.
 DOI [10.6084/m9.figshare.16586228](https://doi.org/10.6084/m9.figshare.16586228).
 Licensed **CC BY 4.0**.
 
-AVONET defines the trait vocabulary this game uses: the habitat categories, the
-mass-based size measure, range centroids and range sizes, and the reveal-screen
-fields (trophic niche, migration behaviour). The curated dataset follows those
-categories so the two are interchangeable; the full pipeline in
-`pipeline/sources/avonet.py` reads AVONET directly.
+Every measurable trait in the shipped dataset comes from AVONET: body mass,
+habitat category, range centroid, range size, migration behaviour and trophic
+niche. `pipeline/enrich_from_avonet.py` reads the published workbook
+(`AVONET Supplementary dataset 1`, sheet `AVONET1_BirdLife`) directly; the
+workbook is committed under `pipeline/raw/` so the join is reproducible.
+
+Diet labels are AVONET's trophic niches reworded for a general audience
+(`Invertivore` → "Insects and invertebrates"); the categories are unchanged.
 
 ## Taxonomy and common names
 

@@ -56,8 +56,15 @@ and the six-guess state machine are plain functions with unit tests.
 
 ## The dataset
 
-The site ships **169 curated species** with all clue fields precomputed — around
-five and a half months of puzzles before the sequence repeats.
+The site ships **169 species** with all clue fields precomputed — around five
+and a half months of puzzles before the sequence repeats.
+
+The species list is hand-picked for recognisability, but every measurable trait
+comes from **AVONET** (Tobias et al. 2022): mass, habitat, range centroid, range
+size, migration and diet. `pipeline/enrich_from_avonet.py` joins the seed to the
+published workbook and overwrites those fields, leaving the things AVONET does
+not carry — common name, colour, the player-facing family label, trivia and
+conservation status — alone. It is idempotent, so re-running it is safe.
 
 Size buckets are derived from the pool's own mass quintiles rather than round
 guesses; `build_dataset.py` prints the resulting spread on every run, and badly
@@ -65,18 +72,40 @@ lopsided buckets make the size clue useless. The thresholds live only in the
 pipeline, which emits the range labels alongside the data, so the client can
 never drift out of step with them.
 
+Two things worth knowing if you re-run the enrichment:
+
+- **AVONET1_BirdLife is the spine, not the eBird sheet.** Only AVONET1 carries
+  range centroids and range sizes; AVONET2_eBird has the traits and no geography
+  at all. AVONET1 follows BirdLife taxonomy, so a handful of binomials are joined
+  through a synonym map and the seed keeps its eBird spelling for display.
+- **The wide-range threshold is 35M km², not the 15M the plan guessed.** At 15M
+  nearly a quarter of the pool lost its compass clue, including Eurasia-only
+  birds like Great Tit whose centroid is perfectly informative. Range size is an
+  imperfect proxy for "spans many continents" at any cut — Osprey is genuinely
+  global at 31M, below Great Tit's 33M — but 35M lands closest to the birds a
+  player would call cosmopolitan.
+
 ### Rebuilding
 
 ```bash
 python3 pipeline/build_dataset.py --strict
 ```
 
-No dependencies for the curated path. CI re-runs this and fails if the committed
+No dependencies for this path. CI re-runs it and fails if the committed
 `species.json` differs, so the data and the seed can't diverge.
 
 To add or correct a species, edit `pipeline/curated/seed_species.json` and
 rebuild. Validation rejects unknown continents, habitats and colours, so a typo
-fails the build rather than reaching a player.
+fails the build rather than reaching a player. To re-pull traits from AVONET
+after adding species (needs `pip install openpyxl`):
+
+```bash
+python3 pipeline/enrich_from_avonet.py \
+  --workbook "pipeline/raw/AVONET Supplementary dataset 1.xlsx" --dry-run
+```
+
+Drop `--dry-run` to write. It reports every field it changes and flags any
+species whose continent label contradicts its published range centroid.
 
 ### The full AVONET pipeline
 
