@@ -296,6 +296,25 @@ button {
   margin-right: 0.15rem;
 }
 
+/* Second line inside a chip, e.g. which continent a compass bearing starts
+   from. Quieter than the value it hangs off. */
+.chip .chip-sub {
+  display: block;
+  font-weight: 500;
+  font-size: 0.62rem;
+  opacity: 0.8;
+  line-height: 1.15;
+  margin-top: 0.1rem;
+}
+
+/* A chip carrying a second line manages its own height; the clamp below would
+   cut the sub-line off. */
+.chip .chip-value:has(.chip-sub) {
+  display: block;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+}
+
 /* Wraps to two lines rather than ellipsizing: on a phone there is no hover to
    reveal a truncated family name. */
 .chip .chip-value {

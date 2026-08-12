@@ -75,8 +75,11 @@ export function ClueRow({ result, species, showColor, sizeRanges }: Props) {
       value="Worldwide"
       tone="hint"
       mark="🌍"
-      title="Today's bird ranges across so much of the world that a direction would not narrow it down"
-    />
+      title={`Your guess lives in ${species.continent}. Today's bird ranges across so much of the world that a direction would not narrow it down`}
+    >
+      Worldwide
+      <span className="chip-sub">from {species.continent}</span>
+    </Chip>
   ) : (
     <Chip
       label="Region"
@@ -90,8 +93,13 @@ export function ClueRow({ result, species, showColor, sizeRanges }: Props) {
           ⬆
         </span>
       }
-      title={`Wrong region — today's bird lives to the ${region.compass} of ${species.continent}`}
-    />
+      title={`Your guess lives in ${species.continent}; today's bird lives to the ${region.compass} of it`}
+    >
+      {region.compass}
+      {/* The arrow alone says which way but not from where, which is the bit
+          that actually helps when you cannot place the guess on a map. */}
+      <span className="chip-sub">from {species.continent}</span>
+    </Chip>
   );
 
   const sizeCorrect = size.result === 'correct';
