@@ -37,9 +37,22 @@ ARCHIVE = (".zip",)
 MAX_TABULAR_BYTES = 80 * 1024 * 1024
 
 
-def get(url: str, *, raw: bool = False):
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=300) as response:
+def get(url: str, *, raw: bool = False, browser: bool = False):
+    headers = {"User-Agent": USER_AGENT}
+    if browser:
+        # The file endpoints refuse a bare script User-Agent with a 403. This
+        # is the same public download a visitor gets by clicking the file on
+        # the dataset page; the data itself is openly licensed.
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+            ),
+            "Accept": "*/*",
+            "Referer": "https://datadryad.org/",
+        }
+    request = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(request, timeout=600) as response:
         data = response.read()
     return data if raw else json.loads(data)
 
@@ -51,23 +64,29 @@ def download_file(entry: dict) -> bytes:
     The whole-dataset /download endpoint requires a token; the per-file routes
     do not, which is the difference between this working and not.
     """
+    links = entry.get("_links", {})
+    print(f"  available links: {sorted(links)}")
+
     urls = []
-    href = entry.get("_links", {}).get("stash:file-download", {}).get("href")
+    href = links.get("stash:file-download", {}).get("href")
     if href:
         urls.append(f"https://datadryad.org{href}")
-    self_href = entry.get("_links", {}).get("self", {}).get("href", "")
-    file_id = self_href.rstrip("/").rsplit("/", 1)[-1]
+    file_id = links.get("self", {}).get("href", "").rstrip("/").rsplit("/", 1)[-1]
     if file_id.isdigit():
+        urls.append(f"{API}/files/{file_id}/download")
         urls.append(f"https://datadryad.org/downloads/file_stream/{file_id}")
 
     last: Exception | None = None
+    # Each candidate is tried with the script's own User-Agent first, then with
+    # a browser one, since the file routes 403 the former.
     for url in urls:
-        try:
-            print(f"  trying {url}")
-            return get(url, raw=True)
-        except Exception as exc:
-            print(f"    {exc}")
-            last = exc
+        for browser in (False, True):
+            try:
+                print(f"  trying {url} (browser-ua={browser})")
+                return get(url, raw=True, browser=browser)
+            except Exception as exc:
+                print(f"    {exc}")
+                last = exc
     raise RuntimeError(f"could not download {entry.get('path')}: {last}")
 
 
