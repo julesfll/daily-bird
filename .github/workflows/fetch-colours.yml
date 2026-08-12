@@ -1,0 +1,50 @@
+name: Fetch colour data
+
+# Manual. Dryad is unreachable from the authoring sandbox and the dataset is
+# far past GitHub's web-upload limit, so CI fetches it and keeps only the
+# tabular file.
+on:
+  workflow_dispatch:
+    inputs:
+      doi:
+        description: "Dryad DOI"
+        required: true
+        default: "10.5061/dryad.70rxwdc6s"
+      all:
+        description: "Keep every tabular file, not just the largest"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch
+        run: |
+          python3 pipeline/fetch_dryad_colours.py \
+            --doi "${{ inputs.doi }}" ${{ inputs.all && '--all' || '' }}
+
+      - name: Show what landed
+        run: ls -la pipeline/raw/
+
+      - name: Commit the result
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f pipeline/raw/
+          if git diff --cached --quiet; then
+            echo "no change"
+          else
+            git commit -m "Add plumage colour data from Dryad"
+            git push
+          fi
