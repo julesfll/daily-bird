@@ -7,10 +7,12 @@ illustration archives alone.
 
     python3 pipeline/fetch_dryad_colours.py --doi 10.5061/dryad.70rxwdc6s
 
-Prints the dataset's full file listing either way, so the selection can be
-corrected if the heuristic picks wrong. Falls back to streaming the whole
-dataset zip and extracting only its tabular members if the per-file endpoints
-are unavailable.
+Prints the dataset's full file listing, and the contents of any archive it
+opens, so the selection can be corrected if the heuristic picks wrong.
+
+Note on Dryad's API: listing a dataset and downloading an individual file are
+both open, but the whole-dataset /download endpoint answers 401 without an API
+token. Everything here goes through the per-file routes.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ API = "https://datadryad.org/api/v2"
 USER_AGENT = "daily-bird-pipeline/1.0 (https://github.com/julesfll/daily-bird)"
 
 TABULAR = (".csv", ".tsv", ".txt", ".xlsx", ".xls")
+ARCHIVE = (".zip",)
 # A species-by-colour table is a few MB at most; anything bigger is imagery.
 MAX_TABULAR_BYTES = 80 * 1024 * 1024
 
@@ -39,6 +42,52 @@ def get(url: str, *, raw: bool = False):
     with urllib.request.urlopen(request, timeout=300) as response:
         data = response.read()
     return data if raw else json.loads(data)
+
+
+def download_file(entry: dict) -> bytes:
+    """Fetch one dataset file, preferring the API and falling back to the
+    public download the website itself uses.
+
+    The whole-dataset /download endpoint requires a token; the per-file routes
+    do not, which is the difference between this working and not.
+    """
+    urls = []
+    href = entry.get("_links", {}).get("stash:file-download", {}).get("href")
+    if href:
+        urls.append(f"https://datadryad.org{href}")
+    self_href = entry.get("_links", {}).get("self", {}).get("href", "")
+    file_id = self_href.rstrip("/").rsplit("/", 1)[-1]
+    if file_id.isdigit():
+        urls.append(f"https://datadryad.org/downloads/file_stream/{file_id}")
+
+    last: Exception | None = None
+    for url in urls:
+        try:
+            print(f"  trying {url}")
+            return get(url, raw=True)
+        except Exception as exc:
+            print(f"    {exc}")
+            last = exc
+    raise RuntimeError(f"could not download {entry.get('path')}: {last}")
+
+
+def extract_tabular(blob: bytes, label: str) -> list[tuple[str, bytes]]:
+    """Pull the tabular members out of a downloaded archive."""
+    out: list[tuple[str, bytes]] = []
+    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+        print(f"\n{label} contains {len(zf.namelist())} member(s):")
+        for info in sorted(zf.infolist(), key=lambda i: -i.file_size):
+            marker = "*" if info.filename.lower().endswith(TABULAR) else " "
+            print(f"  {marker} {human(info.file_size):>8}  {info.filename}")
+        for info in zf.infolist():
+            name = Path(info.filename).name
+            if (
+                info.filename.lower().endswith(TABULAR)
+                and info.file_size <= MAX_TABULAR_BYTES
+                and not name.startswith((".", "__"))
+            ):
+                out.append((name, zf.read(info)))
+    return out
 
 
 def human(size: int | None) -> str:
@@ -77,64 +126,54 @@ def main() -> int:
 
     RAW.mkdir(parents=True, exist_ok=True)
 
-    try:
-        entries = list_files(args.doi)
-    except Exception as exc:
-        print(f"file listing unavailable ({exc}); falling back to the full zip", file=sys.stderr)
-        return fallback_zip(args.doi)
+    # No fallback to the whole-dataset /download endpoint: it answers 401
+    # without an API token, where the listing and per-file routes are open.
+    entries = list_files(args.doi)
 
     print(f"\n{len(entries)} file(s):")
-    wanted = []
+    tabular, archives = [], []
     for entry in entries:
         name = entry.get("path", "?")
         size = entry.get("size")
         print(f"  {human(size):>8}  {name}")
         if name.lower().endswith(TABULAR) and (size or 0) <= MAX_TABULAR_BYTES:
-            wanted.append(entry)
+            tabular.append(entry)
+        elif name.lower().endswith(ARCHIVE):
+            archives.append(entry)
 
-    if not wanted:
-        print("\nno tabular file found; falling back to the full zip", file=sys.stderr)
-        return fallback_zip(args.doi)
+    written: list[str] = []
 
-    # Biggest tabular file first: the per-species colour matrix is the
-    # substantial one, next to any small readme or metadata sheet.
-    wanted.sort(key=lambda e: e.get("size") or 0, reverse=True)
-    if not args.all:
-        wanted = wanted[:1]
-
-    for entry in wanted:
-        href = entry["_links"]["stash:file-download"]["href"]
+    # Biggest first: the per-species colour matrix is the substantial file,
+    # next to any small readme or metadata sheet.
+    for entry in sorted(tabular, key=lambda e: e.get("size") or 0, reverse=True):
         name = Path(entry["path"]).name
         print(f"\ndownloading {name} ({human(entry.get('size'))})…")
-        (RAW / name).write_bytes(get(f"https://datadryad.org{href}", raw=True))
-        print(f"  wrote pipeline/raw/{name}")
-    return 0
+        (RAW / name).write_bytes(download_file(entry))
+        written.append(name)
+        if not args.all:
+            break
 
+    # The colour tables are commonly published inside a single archive rather
+    # than as loose files, which is exactly the case here.
+    if not written:
+        for entry in sorted(archives, key=lambda e: e.get("size") or 0, reverse=True):
+            label = Path(entry["path"]).name
+            print(f"\ndownloading {label} ({human(entry.get('size'))})…")
+            members = extract_tabular(download_file(entry), label)
+            if not members:
+                continue
+            members.sort(key=lambda m: -len(m[1]))
+            for name, data in members if args.all else members[:1]:
+                (RAW / name).write_bytes(data)
+                written.append(name)
+            break
 
-def fallback_zip(doi: str) -> int:
-    encoded = urllib.parse.quote(f"doi:{doi}", safe="")
-    url = f"{API}/datasets/{encoded}/download"
-    print(f"streaming {url} …")
-    blob = get(url, raw=True)
-    print(f"  {human(len(blob))} downloaded")
+    if not written:
+        print("\nno tabular data found in this dataset", file=sys.stderr)
+        return 1
 
-    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
-        print(f"\n{len(zf.namelist())} member(s):")
-        for info in zf.infolist():
-            print(f"  {human(info.file_size):>8}  {info.filename}")
-        members = [
-            i
-            for i in zf.infolist()
-            if i.filename.lower().endswith(TABULAR) and i.file_size <= MAX_TABULAR_BYTES
-        ]
-        if not members:
-            print("no tabular member found", file=sys.stderr)
-            return 1
-        members.sort(key=lambda i: i.file_size, reverse=True)
-        target = members[0]
-        name = Path(target.filename).name
-        (RAW / name).write_bytes(zf.read(target))
-        print(f"\nwrote pipeline/raw/{name} ({human(target.file_size)})")
+    for name in written:
+        print(f"wrote pipeline/raw/{name} ({human((RAW / name).stat().st_size)})")
     return 0
 
 

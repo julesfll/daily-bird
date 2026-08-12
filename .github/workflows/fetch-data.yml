@@ -11,6 +11,10 @@ on:
         description: "Only process the first N species (blank = all ~11,000)"
         required: false
         default: ""
+      commit:
+        description: "Commit the result (turn off for a quick verification run)"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -41,14 +45,32 @@ jobs:
           python3 pipeline/fetch_online_data.py \
             ${{ inputs.limit && format('--limit {0}', inputs.limit) || '' }}
 
+      # Belt and braces: an hour of crawling should survive anything that goes
+      # wrong with the commit below.
+      - name: Upload the result as an artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: online-data
+          path: pipeline/raw/online_data.json
+          if-no-files-found: warn
+
       - name: Commit the result
+        if: ${{ inputs.commit }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add pipeline/raw/online_data.json
           if git diff --cached --quiet; then
             echo "no change"
-          else
-            git commit -m "Refresh online species data (Wikidata, pageviews, continents)"
-            git push
+            exit 0
           fi
+          git commit -m "Refresh online species data (Wikidata, pageviews, continents)"
+          # main will have moved on during a run this long; rebasing keeps the
+          # push from being rejected and the crawl from being wasted.
+          for attempt in 1 2 3; do
+            git pull --rebase origin main && git push && exit 0
+            echo "push attempt $attempt failed; retrying"
+            sleep 5
+          done
+          exit 1
