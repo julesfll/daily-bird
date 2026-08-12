@@ -68,9 +68,12 @@ def download_file(entry: dict) -> bytes:
     print(f"  available links: {sorted(links)}")
 
     urls = []
-    href = links.get("stash:file-download", {}).get("href")
-    if href:
-        urls.append(f"https://datadryad.org{href}")
+    # The link the API itself advertises for this file is the one that works.
+    # Its key varies by Dryad version, hence both spellings.
+    for key in ("stash:download", "stash:file-download"):
+        href = links.get(key, {}).get("href")
+        if href:
+            urls.append(href if href.startswith("http") else f"https://datadryad.org{href}")
     file_id = links.get("self", {}).get("href", "").rstrip("/").rsplit("/", 1)[-1]
     if file_id.isdigit():
         urls.append(f"{API}/files/{file_id}/download")
@@ -78,15 +81,25 @@ def download_file(entry: dict) -> bytes:
 
     last: Exception | None = None
     # Each candidate is tried with the script's own User-Agent first, then with
-    # a browser one, since the file routes 403 the former.
+    # a browser one, since some routes 403 the former.
     for url in urls:
         for browser in (False, True):
             try:
                 print(f"  trying {url} (browser-ua={browser})")
-                return get(url, raw=True, browser=browser)
+                blob = get(url, raw=True, browser=browser)
             except Exception as exc:
                 print(f"    {exc}")
                 last = exc
+                continue
+            # A 200 is not proof of success here: some routes answer with an
+            # HTML interstitial rather than the file.
+            if blob[:1] == b"<" or blob[:15].lower().startswith(b"<!doctype html"):
+                preview = blob[:120].decode("utf-8", "replace").replace("\n", " ")
+                print(f"    got HTML, not the file: {preview}")
+                last = RuntimeError("HTML response")
+                continue
+            print(f"    got {human(len(blob))}, starts with {blob[:4]!r}")
+            return blob
     raise RuntimeError(f"could not download {entry.get('path')}: {last}")
 
 
