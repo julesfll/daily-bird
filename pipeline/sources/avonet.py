@@ -1,312 +1,190 @@
-"""The full AVONET + Wikidata + pageviews pipeline.
+"""Assemble the expanded species pool from AVONET plus the committed crawl.
 
-STATUS: written but never executed end to end. The environment this was
-authored in blocked egress to figshare, Wikidata, Wikimedia and Dryad, so every
-network step here is unverified. Expect to fix details -- column spellings,
-sheet names, SPARQL timeouts -- on the first real run. It is a starting point,
-not a finished artefact. The site currently ships the curated seed instead; see
-README.md.
+Inputs, both already in the repo:
 
-What it produces: the same row shape build_dataset.py expects from the curated
-seed, so `--source avonet` is a drop-in swap for a much larger pool.
+  pipeline/raw/AVONET Supplementary dataset 1.xlsx   traits and geography
+  pipeline/raw/online_data.json                      names, articles, IUCN,
+                                                     pageviews, continents
 
-Steps:
-  1. AVONET (Tobias et al. 2022, CC BY 4.0) -> trait spine, ~11k species.
-  2. Wikidata SPARQL -> English common name, enwiki article, IUCN status.
-  3. Wikimedia pageviews -> popularity, to cut the pool to recognisable birds.
-  4. Natural Earth polygons -> continent from the range centroid.
+No network access: fetch_online_data.py does all of that in CI and commits its
+result, so this step is offline and reproducible.
 
-Colour is the gap: the HBW plumage dataset (Han et al., Dryad
-doi:10.5061/dryad.70rxwdc6s) needs a manual download, and there is no
-defensible way to guess a species' dominant colour without it. Until that file
-is present this module raises rather than inventing colours -- drop it at
-pipeline/raw/hbw_colours.csv, or set clues.color = False in the output and hide
-the colour clue.
-
-Requires: pip install -r pipeline/requirements.txt
+Selection is by English Wikipedia pageviews, most-read first, which is the only
+workable proxy for "a player might have heard of this". AVONET's 11,009 species
+are overwhelmingly birds nobody outside ornithology could name.
 """
 
 from __future__ import annotations
 
-import csv
 import json
-import time
-import urllib.parse
-import urllib.request
+import re
+from collections import Counter
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
-RAW_DIR = Path(__file__).resolve().parent.parent / "raw"
-CACHE_DIR = Path(__file__).resolve().parent.parent / ".cache"
+RAW = Path(__file__).resolve().parent.parent / "raw"
+WORKBOOK = RAW / "AVONET Supplementary dataset 1.xlsx"
+ONLINE = RAW / "online_data.json"
 
-FIGSHARE_ARTICLE = "16586228"  # AVONET, DOI 10.6084/m9.figshare.16586228
-WIKIDATA_SPARQL = "https://query.wikidata.org/sparql"
-PAGEVIEWS_API = (
-    "https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article"
-    "/en.wikipedia/all-access/all-agents/{title}/monthly/{start}/{end}"
-)
-NATURAL_EARTH_LAND = (
-    "https://naturalearth.s3.amazonaws.com/110m_physical/ne_110m_land.zip"
-)
-
-USER_AGENT = "daily-bird-pipeline/1.0 (https://github.com/julesfll/daily-bird)"
-
-# How many of the most-viewed species to keep. The plan's 1,000-1,500 range is
-# roughly three years of daily puzzles.
 POOL_SIZE = 1200
 
-# Ranges larger than this get the compass sub-clue suppressed: a centroid is a
-# poor summary of a bird found across half the planet.
-WIDE_RANGE_KM2 = 15_000_000
+# Ranges past this get the compass sub-clue suppressed; see build_dataset.py
+# for why 35M rather than the 15M the original plan guessed at.
+WIDE_RANGE_KM2 = 35_000_000
 
-# AVONET habitat values pass through unchanged; its vocabulary is already the
-# one build_dataset.py validates against.
-HABITAT_ALIASES = {"Human modified": "Human Modified"}
+MIGRATION = {1: "Sedentary", 2: "Partial migrant", 3: "Migratory"}
 
+DIET = {
+    "Invertivore": "Insects and invertebrates",
+    "Vertivore": "Birds and mammals",
+    "Aquatic predator": "Fish and aquatic prey",
+    "Granivore": "Seeds and grain",
+    "Frugivore": "Fruit",
+    "Nectarivore": "Nectar",
+    "Herbivore terrestrial": "Leaves and plants",
+    "Herbivore aquatic": "Aquatic plants",
+    "Scavenger": "Carrion",
+    "Omnivore": "Omnivore",
+}
 
-def _fetch(url: str, cache_name: str, *, binary: bool = False) -> bytes | str:
-    """GET with an on-disk cache, so reruns do not hammer the APIs."""
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cached = CACHE_DIR / cache_name
-    if cached.exists():
-        return cached.read_bytes() if binary else cached.read_text(encoding="utf-8")
-
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=120) as response:
-        payload = response.read()
-    cached.write_bytes(payload)
-    return payload if binary else payload.decode("utf-8")
-
-
-# --------------------------------------------------------------------------
-# 1. AVONET
-# --------------------------------------------------------------------------
+# Words that stay lowercase inside a bird's name.
+_SMALL = {"of", "the", "and", "a", "an", "in"}
 
 
-def load_avonet() -> list[dict[str, Any]]:
-    """Read the eBird species-averages sheet of AVONET Supplementary dataset 1.
+def display_name(title: str) -> str:
+    """Turn a Wikipedia article title into a name to show a player.
 
-    Download it once by hand if the figshare API is awkward: the article page is
-    https://doi.org/10.6084/m9.figshare.16586228 and the file wanted is the
-    Excel workbook. Save it to pipeline/raw/AVONET.xlsx.
+    Wikipedia titles beat Wikidata's "taxon common name" comprehensively: that
+    property yields comma-separated lists ("swift, common swift"), obscure
+    synonyms ("Owl Parrot" for the kakapo), inconsistent case, and in at least
+    one case a Navajo name tagged as English. Titles are the name people
+    actually use.
     """
-    import pandas as pd  # imported lazily so the curated path needs no pandas
+    # "Merlin (bird)", "Brant (goose)" -- disambiguation is not part of the name.
+    name = re.sub(r"\s*\([^)]*\)\s*$", "", title).strip()
 
-    workbook = RAW_DIR / "AVONET.xlsx"
-    if not workbook.exists():
-        meta = json.loads(
-            _fetch(
-                f"https://api.figshare.com/v2/articles/{FIGSHARE_ARTICLE}",
-                "figshare.json",
-            )
+    words = []
+    for index, word in enumerate(name.split()):
+        if index > 0 and word.lower() in _SMALL:
+            words.append(word.lower())
+        else:
+            # Only the start of each space-separated word is capitalised, so
+            # "white-bellied sea eagle" becomes "White-bellied Sea Eagle"
+            # rather than "White-Bellied ...".
+            words.append(word[:1].upper() + word[1:])
+    return " ".join(words)
+
+
+def to_float(value: Any) -> float | None:
+    """AVONET writes every missing value as the string 'NA', in every column."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def clean(value: Any) -> str:
+    text = str(value).strip() if value is not None else ""
+    return "" if text in ("", "NA", "None") else text
+
+
+def load_avonet() -> dict[str, dict[str, Any]]:
+    import openpyxl
+
+    wb = openpyxl.load_workbook(WORKBOOK, read_only=True)
+    ws = wb["AVONET1_BirdLife"]
+    rows = ws.iter_rows(values_only=True)
+    header = list(next(rows))
+    at = {name: i for i, name in enumerate(header)}
+
+    table: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        name = row[at["Species1"]]
+        if not name:
+            continue
+        table[name] = {
+            "family_sci": clean(row[at["Family1"]]),
+            "mass": to_float(row[at["Mass"]]),
+            "habitat": clean(row[at["Habitat"]]),
+            "migration": to_float(row[at["Migration"]]),
+            "niche": clean(row[at["Trophic.Niche"]]),
+            "lat": to_float(row[at["Centroid.Latitude"]]),
+            "lon": to_float(row[at["Centroid.Longitude"]]),
+            "range": to_float(row[at["Range.Size"]]),
+        }
+    return table
+
+
+def build_rows(pool_size: int = POOL_SIZE) -> list[dict[str, Any]]:
+    """Entry point used by build_dataset.py --source avonet."""
+    from .families import FAMILY_LABELS
+
+    if not ONLINE.exists():
+        raise FileNotFoundError(
+            f"{ONLINE} missing. Run the 'Fetch online data' workflow first."
         )
-        candidates = [f for f in meta["files"] if f["name"].lower().endswith((".xlsx", ".xls"))]
-        if not candidates:
-            raise RuntimeError("no Excel file found in the figshare article")
-        RAW_DIR.mkdir(parents=True, exist_ok=True)
-        workbook.write_bytes(_fetch(candidates[0]["download_url"], "avonet.xlsx", binary=True))
 
-    frame = pd.read_excel(workbook, sheet_name="AVONET1_eBird")
+    avonet = load_avonet()
+    online = json.loads(ONLINE.read_text(encoding="utf-8"))
+    online.sort(key=lambda r: r.get("views") or 0, reverse=True)
+
     rows: list[dict[str, Any]] = []
-    for record in frame.to_dict("records"):
-        habitat = str(record.get("Habitat", "")).strip()
+    unmapped: Counter[str] = Counter()
+    skipped = Counter()
+
+    for record in online:
+        if len(rows) >= pool_size:
+            break
+        if not record.get("views"):
+            skipped["no pageviews"] += 1
+            continue
+
+        traits = avonet.get(record["sci"])
+        if traits is None:
+            skipped["not in AVONET"] += 1
+            continue
+        if not record.get("wiki"):
+            skipped["no article"] += 1
+            continue
+        if traits["mass"] is None or not traits["habitat"]:
+            skipped["missing traits"] += 1
+            continue
+        if traits["lat"] is None or not record.get("continent"):
+            skipped["no location"] += 1
+            continue
+
+        family = FAMILY_LABELS.get(traits["family_sci"])
+        if not family:
+            unmapped[traits["family_sci"]] += 1
+            continue
+
         rows.append(
             {
-                "sci": str(record["Species1"]).strip(),
-                "family_sci": str(record.get("Family1", "")).strip(),
-                "mass": record.get("Mass"),
-                "habitat": HABITAT_ALIASES.get(habitat, habitat),
-                "lat": record.get("Centroid.Latitude"),
-                "lon": record.get("Centroid.Longitude"),
-                "range_size": record.get("Range.Size"),
-                "diet": str(record.get("Trophic.Niche", "")).strip(),
-                "migration": _migration_label(record.get("Migration")),
+                "sci": record["sci"],
+                "name": display_name(record["wiki"]),
+                "family": family,
+                "mass": round(traits["mass"], 1),
+                "habitat": traits["habitat"],
+                "continent": record["continent"],
+                "lat": round(traits["lat"], 2),
+                "lon": round(traits["lon"], 2),
+                "wide": bool(traits["range"] and traits["range"] > WIDE_RANGE_KM2),
+                "wiki": record["wiki"],
+                "diet": DIET.get(traits["niche"]) or traits["niche"] or "Varied",
+                "migration": MIGRATION.get(
+                    int(traits["migration"]) if traits["migration"] else 0, "Unknown"
+                ),
+                "status": record.get("status") or "Not assessed",
+                # No hand-written trivia at this scale; the reveal card falls
+                # back to the Wikipedia extract it already fetches for the photo.
+                "fact": "",
             }
         )
-    return rows
 
-
-def _migration_label(code: Any) -> str:
-    """AVONET encodes migration as 1/2/3."""
-    return {1: "Sedentary", 2: "Partial migrant", 3: "Migratory"}.get(int(code or 0), "Unknown")
-
-
-# --------------------------------------------------------------------------
-# 2. Wikidata
-# --------------------------------------------------------------------------
-
-SPARQL_TEMPLATE = """
-SELECT ?taxonName ?commonName ?iucnLabel ?article WHERE {
-  VALUES ?taxonName { %s }
-  ?item wdt:P225 ?taxonName .
-  OPTIONAL { ?item wdt:P1843 ?commonName . FILTER(LANG(?commonName) = "en") }
-  OPTIONAL { ?item wdt:P141 ?iucn . }
-  OPTIONAL {
-    ?article schema:about ?item ;
-             schema:isPartOf <https://en.wikipedia.org/> .
-  }
-  SERVICE wikibase:label { bd:serviceParam wikibase:language "en" }
-}
-"""
-
-
-def enrich_from_wikidata(rows: list[dict[str, Any]], batch: int = 150) -> None:
-    """Attach common name, IUCN status and Wikipedia title, in place.
-
-    Batched because a VALUES clause with 11,000 entries will time out.
-    """
-    by_name = {row["sci"]: row for row in rows}
-    names = list(by_name)
-
-    for start in range(0, len(names), batch):
-        chunk = names[start : start + batch]
-        values = " ".join(f'"{name}"' for name in chunk)
-        query = SPARQL_TEMPLATE % values
-        url = f"{WIKIDATA_SPARQL}?{urllib.parse.urlencode({'query': query, 'format': 'json'})}"
-        payload = json.loads(_fetch(url, f"wikidata-{start}.json"))
-
-        for binding in payload["results"]["bindings"]:
-            row = by_name.get(binding["taxonName"]["value"])
-            if row is None:
-                continue
-            if "commonName" in binding:
-                row["name"] = binding["commonName"]["value"]
-            if "iucnLabel" in binding:
-                row["status"] = binding["iucnLabel"]["value"]
-            if "article" in binding:
-                row["wiki"] = urllib.parse.unquote(
-                    binding["article"]["value"].rsplit("/", 1)[-1]
-                ).replace("_", " ")
-        time.sleep(1)  # be polite to a free public endpoint
-
-
-# --------------------------------------------------------------------------
-# 3. Popularity
-# --------------------------------------------------------------------------
-
-
-def rank_by_pageviews(rows: list[dict[str, Any]], start: str, end: str) -> list[dict[str, Any]]:
-    """Sort by 12-month English Wikipedia pageviews, most-read first.
-
-    This is the slow step: one request per article, rate limited. Expect tens of
-    minutes for the full AVONET list. Results are cached per article.
-    """
-    scored: list[tuple[int, dict[str, Any]]] = []
-    for row in rows:
-        title = row.get("wiki")
-        if not title:
-            continue
-        quoted = urllib.parse.quote(title.replace(" ", "_"), safe="")
-        url = PAGEVIEWS_API.format(title=quoted, start=start, end=end)
-        try:
-            payload = json.loads(_fetch(url, f"views-{quoted[:80]}.json"))
-            total = sum(item["views"] for item in payload.get("items", []))
-        except Exception:
-            total = 0  # article missing or renamed; it simply ranks last
-        scored.append((total, row))
-        time.sleep(0.1)
-
-    scored.sort(key=lambda pair: pair[0], reverse=True)
-    return [row for _, row in scored]
-
-
-# --------------------------------------------------------------------------
-# 4. Continent
-# --------------------------------------------------------------------------
-
-
-def attach_continents(rows: Iterable[dict[str, Any]]) -> None:
-    """Resolve each centroid to a continent, in place.
-
-    Uses Natural Earth polygons. Centroids landing in the ocean -- common for
-    island and seabird species -- snap to the nearest landmass.
-    """
-    import geopandas as gpd
-    from shapely.geometry import Point
-
-    land = gpd.read_file(NATURAL_EARTH_LAND)
-    if "CONTINENT" not in land.columns:
-        raise RuntimeError(
-            "Natural Earth land layer has no CONTINENT column; use the "
-            "admin_0_countries layer and dissolve by continent instead"
-        )
-
-    for row in rows:
-        point = Point(row["lon"], row["lat"])
-        hit = land[land.contains(point)]
-        if len(hit):
-            row["continent"] = hit.iloc[0]["CONTINENT"]
-        else:
-            distances = land.distance(point)
-            row["continent"] = land.loc[distances.idxmin(), "CONTINENT"]
-
-
-# --------------------------------------------------------------------------
-# Colour
-# --------------------------------------------------------------------------
-
-# The 24 HBW shades collapse to the player-facing buckets in build_dataset.py.
-COLOUR_BUCKETS = {
-    "navy": "blue", "sky": "blue", "teal": "blue", "blue": "blue",
-    "crimson": "red", "scarlet": "red", "maroon": "red", "red": "red",
-    "olive": "green", "lime": "green", "green": "green",
-    "tan": "brown", "chestnut": "brown", "buff": "brown", "brown": "brown",
-    "charcoal": "black", "black": "black",
-    "silver": "gray", "grey": "gray", "gray": "gray",
-    "cream": "white", "white": "white",
-    "gold": "yellow", "yellow": "yellow",
-    "orange": "orange", "rufous": "orange",
-    "pink": "pink", "magenta": "pink",
-}
-
-
-def attach_colours(rows: Iterable[dict[str, Any]]) -> None:
-    """Set `color` from the HBW plumage proportions (male plumage if dimorphic).
-
-    Raises if the file is absent rather than guessing: a wrong colour clue is
-    worse than no colour clue.
-    """
-    source = RAW_DIR / "hbw_colours.csv"
-    if not source.exists():
-        raise FileNotFoundError(
-            f"{source} not found. Download the plumage colour dataset from "
-            "Dryad (doi:10.5061/dryad.70rxwdc6s) and place it there, or run "
-            "with the colour clue disabled."
-        )
-
-    with source.open(encoding="utf-8") as handle:
-        table = {row["species"]: row for row in csv.DictReader(handle)}
-
-    for row in rows:
-        record = table.get(row["sci"])
-        if not record:
-            continue
-        shades = {k: float(v) for k, v in record.items() if k != "species" and v}
-        if not shades:
-            continue
-        dominant = max(shades, key=shades.get)
-        row["color"] = COLOUR_BUCKETS.get(dominant.lower(), dominant.lower())
-
-
-def build_rows() -> list[dict[str, Any]]:
-    """Entry point used by build_dataset.py --source avonet."""
-    rows = load_avonet()
-    print(f"AVONET: {len(rows)} species")
-
-    enrich_from_wikidata(rows)
-    rows = [r for r in rows if r.get("name") and r.get("wiki")]
-    print(f"After Wikidata join: {len(rows)}")
-
-    rows = rank_by_pageviews(rows, "2025010100", "2025123100")[:POOL_SIZE]
-    print(f"After popularity cut: {len(rows)}")
-
-    attach_continents(rows)
-    attach_colours(rows)
-
-    for row in rows:
-        row["wide"] = bool(row.get("range_size") or 0) and row["range_size"] > WIDE_RANGE_KM2
-        row["family"] = row.get("family_common") or row.get("family_sci", "")
-        row.setdefault("status", "Not assessed")
-        row.setdefault("fact", "")
-
+    print(f"  selected {len(rows)} species")
+    print(f"  skipped: {dict(skipped)}")
+    if unmapped:
+        print(f"  {len(unmapped)} unmapped families cost {sum(unmapped.values())} species:")
+        for name, count in unmapped.most_common(60):
+            print(f"    {count:>4}  {name}")
     return rows

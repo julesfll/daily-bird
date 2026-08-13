@@ -8,22 +8,24 @@ interface Props {
   sizeRanges: Record<SizeBucket, string>;
 }
 
-interface Photo {
-  src: string;
+interface Summary {
+  src?: string;
   pageUrl: string;
+  extract?: string;
 }
 
 /**
- * Photos come from Wikipedia at reveal time rather than being baked into the
- * dataset: image URLs rot, and fetching on demand keeps the shipped file small.
- * A failure here is silent — the card simply renders without a picture.
+ * The photo and the blurb both come from Wikipedia at reveal time rather than
+ * being baked into the dataset: image URLs rot, fetching on demand keeps the
+ * shipped file small, and at 1,200 species there is no hand-written trivia to
+ * ship anyway. A failure here is silent — the card simply renders without them.
  */
-function useWikipediaPhoto(title: string): Photo | null {
-  const [photo, setPhoto] = useState<Photo | null>(null);
+function useWikipediaSummary(title: string): Summary | null {
+  const [summary, setSummary] = useState<Summary | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    setPhoto(null);
+    setSummary(null);
 
     const endpoint = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(
       title.replace(/ /g, '_'),
@@ -33,15 +35,14 @@ function useWikipediaPhoto(title: string): Photo | null {
       .then((response) => (response.ok ? response.json() : null))
       .then((data) => {
         if (cancelled || !data) return;
-        const src = data.thumbnail?.source ?? data.originalimage?.source;
-        if (!src) return;
-        setPhoto({
-          src,
+        setSummary({
+          src: data.thumbnail?.source ?? data.originalimage?.source,
           pageUrl: data.content_urls?.desktop?.page ?? `https://en.wikipedia.org/wiki/${title}`,
+          extract: data.extract,
         });
       })
       .catch(() => {
-        /* offline or blocked; the card works without the photo */
+        /* offline or blocked; the card works without them */
       });
 
     return () => {
@@ -49,7 +50,7 @@ function useWikipediaPhoto(title: string): Photo | null {
     };
   }, [title]);
 
-  return photo;
+  return summary;
 }
 
 function massLabel(grams: number): string {
@@ -57,7 +58,9 @@ function massLabel(grams: number): string {
 }
 
 export function RevealCard({ species, won, guessCount, sizeRanges }: Props) {
-  const photo = useWikipediaPhoto(species.wiki);
+  const summary = useWikipediaSummary(species.wiki);
+  // Hand-written trivia where it exists, Wikipedia's opening line otherwise.
+  const blurb = species.reveal.fact || summary?.extract;
 
   return (
     <section className="reveal" aria-live="polite">
@@ -67,14 +70,14 @@ export function RevealCard({ species, won, guessCount, sizeRanges }: Props) {
           : "Out of guesses — today's bird was"}
       </div>
 
-      {photo && (
-        <img className="reveal-photo" src={photo.src} alt={species.name} loading="lazy" />
+      {summary?.src && (
+        <img className="reveal-photo" src={summary.src} alt={species.name} loading="lazy" />
       )}
 
       <div className="reveal-body">
         <h2>{species.name}</h2>
         <p className="sci">{species.sci}</p>
-        <p className="reveal-fact">{species.reveal.fact}</p>
+        {blurb && <p className="reveal-fact">{blurb}</p>}
 
         <dl className="facts">
           <div>
@@ -114,10 +117,10 @@ export function RevealCard({ species, won, guessCount, sizeRanges }: Props) {
         </dl>
       </div>
 
-      {photo && (
+      {summary && (
         <p className="photo-credit">
           Photo and article from{' '}
-          <a href={photo.pageUrl} target="_blank" rel="noreferrer noopener">
+          <a href={summary.pageUrl} target="_blank" rel="noreferrer noopener">
             Wikipedia
           </a>
           , CC BY-SA.

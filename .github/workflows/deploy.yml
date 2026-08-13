@@ -33,7 +33,8 @@ jobs:
 
       - name: Check the committed dataset is what the pipeline produces
         run: |
-          python3 pipeline/build_dataset.py --strict
+          pip install --quiet openpyxl
+          python3 pipeline/build_dataset.py --source "$(cat pipeline/SOURCE)" --strict
           git diff --exit-code public/data/species.json
 
       - run: npm run build

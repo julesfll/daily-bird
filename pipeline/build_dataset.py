@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
 import sys
 from collections import Counter
@@ -76,7 +77,6 @@ REQUIRED_FIELDS = (
     "sci",
     "name",
     "family",
-    "color",
     "mass",
     "habitat",
     "continent",
@@ -86,30 +86,68 @@ REQUIRED_FIELDS = (
     "wiki",
 )
 REVEAL_FIELDS = ("diet", "migration", "status", "fact")
+# Colour is optional: the expanded pool has no licensable colour source, and
+# the clue hides itself when the data is absent. Trivia is optional for the
+# same practical reason -- nobody is hand-writing 1,200 fun facts, so the
+# reveal card falls back to the Wikipedia extract it already fetches.
+OPTIONAL_REVEAL_FIELDS = ("fact",)
 
-# Chosen from the curated pool's own mass quintiles (roughly 57 g / 300 g /
-# 1.1 kg / 4 kg), rounded to numbers a player can hold in their head. Re-tune
-# these if the pool changes substantially -- report_distribution() prints the
-# resulting spread, and badly lopsided buckets make the size clue uninformative.
-SIZE_THRESHOLDS = (("XS", 50), ("S", 300), ("M", 1000), ("L", 4000))
+def nice_number(value: float) -> int:
+    """Snap to the nearest round number a player can hold in their head.
 
-SIZE_RANGE_LABELS = {
-    "XS": "under 50 g",
-    "S": "50–300 g",
-    "M": "300 g – 1 kg",
-    "L": "1–4 kg",
-    "XL": "over 4 kg",
-}
+    Nearest, not upward: rounding 17 g up to 50 g would sweep two quintiles of
+    small passerines into one bucket.
+    """
+    if value <= 0:
+        return 1
+    exponent = math.floor(math.log10(value))
+    base = 10**exponent
+    candidates = [step * base for step in (1, 2, 5, 10)]
+    return int(min(candidates, key=lambda c: abs(c - value)))
 
 
-def mass_to_bucket(grams: float) -> str:
+def mass_label(grams: float) -> str:
+    if grams >= 1000:
+        return f"{grams / 1000:g} kg"
+    return f"{grams:g} g"
+
+
+def size_thresholds(masses: list[float]) -> list[tuple[str, int]]:
+    """Cut the pool into five roughly equal size classes.
+
+    Derived from the pool's own mass quintiles rather than fixed numbers,
+    because the right cuts depend entirely on which birds are in it: a pool of
+    well-known species skews large, while the full taxonomy is mostly small
+    passerines. Fixed thresholds put 382 of 1,200 species in one bucket.
+    """
+    ordered = sorted(masses)
+    cuts = []
+    for quintile in (0.2, 0.4, 0.6, 0.8):
+        raw = ordered[int(len(ordered) * quintile)]
+        candidate = nice_number(raw)
+        # Keep the cuts strictly increasing even when two quintiles round together.
+        if cuts and candidate <= cuts[-1]:
+            candidate = cuts[-1] * 2
+        cuts.append(candidate)
+    return list(zip(("XS", "S", "M", "L"), cuts))
+
+
+def size_range_labels(thresholds: list[tuple[str, int]]) -> dict[str, str]:
+    cuts = [c for _, c in thresholds]
+    labels = {"XS": f"under {mass_label(cuts[0])}"}
+    for index, (bucket, _) in enumerate(thresholds[1:], start=1):
+        labels[bucket] = f"{mass_label(cuts[index - 1])} – {mass_label(cuts[index])}"
+    labels["XL"] = f"over {mass_label(cuts[-1])}"
+    return labels
+
+
+def mass_to_bucket(grams: float, thresholds: list[tuple[str, int]]) -> str:
     """The pipeline is the only place mass becomes a bucket.
 
     The client never re-derives this: it reads the precomputed `size` field and
-    the range labels below, so there is a single source of truth for the
-    thresholds.
+    the range labels shipped alongside, so there is a single source of truth.
     """
-    for bucket, ceiling in SIZE_THRESHOLDS:
+    for bucket, ceiling in thresholds:
         if grams < ceiling:
             return bucket
     return "XL"
@@ -132,7 +170,7 @@ def validate(row: dict[str, Any], index: int) -> list[str]:
         problems.append(f"{label}: unknown continent {row.get('continent')!r}")
     if row.get("habitat") not in HABITATS:
         problems.append(f"{label}: unknown habitat {row.get('habitat')!r}")
-    if row.get("color") not in COLORS:
+    if row.get("color") and row["color"] not in COLORS:
         problems.append(f"{label}: unknown colour {row.get('color')!r}")
 
     mass = row.get("mass")
@@ -148,21 +186,23 @@ def validate(row: dict[str, Any], index: int) -> list[str]:
         problems.append(f"{label}: wide must be true or false")
 
     for field in REVEAL_FIELDS:
-        if not row.get(field):
+        if field not in OPTIONAL_REVEAL_FIELDS and not row.get(field):
             problems.append(f"{label}: missing reveal field {field}")
 
     return problems
 
 
-def to_species(row: dict[str, Any], species_id: int) -> dict[str, Any]:
+def to_species(
+    row: dict[str, Any], species_id: int, thresholds: list[tuple[str, int]]
+) -> dict[str, Any]:
     return {
         "id": species_id,
         "sci": row["sci"],
         "name": row["name"],
         "family": row["family"],
-        "color": row["color"],
+        "color": row.get("color", ""),
         "mass": row["mass"],
-        "size": mass_to_bucket(row["mass"]),
+        "size": mass_to_bucket(row["mass"], thresholds),
         "habitat": row["habitat"],
         "continent": row["continent"],
         "lat": row["lat"],
@@ -179,6 +219,7 @@ def load_curated() -> list[dict[str, Any]]:
 
 
 def load_avonet() -> list[dict[str, Any]]:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
     from sources.avonet import build_rows
 
     return build_rows()
@@ -227,7 +268,10 @@ def main() -> int:
     if duplicates:
         raise ValidationError(f"duplicate scientific names: {duplicates}")
 
-    species = [to_species(row, i) for i, row in enumerate(kept)]
+    thresholds = size_thresholds([row["mass"] for row in kept])
+    print("Size cuts from the pool's own quintiles: "
+          + ", ".join(f"{b}<{c}g" for b, c in thresholds))
+    species = [to_species(row, i, thresholds) for i, row in enumerate(kept)]
     if not species:
         raise ValidationError("no usable species; refusing to write an empty pool")
 
@@ -236,11 +280,17 @@ def main() -> int:
     pool_order = list(range(len(species)))
     random.Random(SHUFFLE_SEED).shuffle(pool_order)
 
+    # The colour clue only appears when the data can actually support it.
+    has_colour = all(s["color"] for s in species)
+    if not has_colour:
+        missing = sum(1 for s in species if not s["color"])
+        print(f"Colour clue disabled: {missing}/{len(species)} species have no colour")
+
     payload = {
         "launchDate": LAUNCH_DATE,
         "poolOrder": pool_order,
-        "clues": {"color": True},
-        "sizeRanges": SIZE_RANGE_LABELS,
+        "clues": {"color": has_colour},
+        "sizeRanges": size_range_labels(thresholds),
         "species": species,
     }
 
