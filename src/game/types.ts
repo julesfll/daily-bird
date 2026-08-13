@@ -103,4 +103,6 @@ export interface GameState {
    * re-derived from the date the way the daily puzzle can.
    */
   targetId?: number;
+  /** Whether the player revealed the photo. Persisted so a refresh keeps it. */
+  hintUsed?: boolean;
 }

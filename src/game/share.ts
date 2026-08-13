@@ -55,5 +55,8 @@ export function buildShareText(
         ? `${used}/${limit}`
         : `X/${limit}`;
   const grid = state.guesses.map((g) => rowFor(g, file.clues.color)).join('\n');
-  return [`${title} ${score}`, '', grid, '', url].join('\n');
+  // Flagged rather than hidden: a grid that took a photo hint should not read
+  // the same as one that did not.
+  const hint = state.hintUsed ? ' 🔍' : '';
+  return [`${title} ${score}${hint}`, '', grid, '', url].join('\n');
 }

@@ -2,11 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ClueRow } from './components/ClueRow';
 import { Countdown } from './components/Countdown';
 import { GuessInput } from './components/GuessInput';
+import { PhotoHint } from './components/PhotoHint';
 import { RevealCard } from './components/RevealCard';
 import { StatsPanel } from './components/StatsPanel';
 import { DAILY_MODE, GUESS_LIMIT } from './config';
 import { puzzleNumber, randomTarget, targetForDate, todayUTC } from './game/daily';
-import { giveUp, guessesRemaining, newGame, submitGuess } from './game/engine';
+import { giveUp, guessesRemaining, markHintUsed, newGame, submitGuess } from './game/engine';
 import { buildShareText } from './game/share';
 import type { GameState, Species, SpeciesFile } from './game/types';
 import { computeStats, load, recordResult, save, type Store } from './storage';
@@ -22,7 +23,7 @@ function finish(store: Store, state: GameState): Store {
   return DAILY_MODE ? recordResult(store, state) : store;
 }
 
-function Help() {
+function Help({ clueCount }: { clueCount: number }) {
   return (
     <div className="help">
       <h2>How to play</h2>
@@ -33,7 +34,7 @@ function Help() {
         {GUESS_LIMIT === null
           ? 'Guess as many times as you like — '
           : `You have ${GUESS_LIMIT} guesses — `}
-        each one is scored against the answer on five traits.
+        each one is scored against the answer on {clueCount} traits.
       </p>
       <ul className="legend">
         <li>
@@ -137,6 +138,10 @@ export function App() {
     [game, target, persist, store],
   );
 
+  const onHint = useCallback(() => {
+    persist({ ...store, game: markHintUsed(game) });
+  }, [game, persist, store]);
+
   const onGiveUp = useCallback(() => {
     const next = giveUp(game);
     setNote('');
@@ -217,7 +222,7 @@ export function App() {
         </button>
       </header>
 
-      {showHelp && <Help />}
+      {showHelp && <Help clueCount={file.clues.color ? 5 : 4} />}
 
       {!finished && (
         <GuessInput
@@ -227,6 +232,10 @@ export function App() {
           onGuess={onGuess}
           note={note || counter}
         />
+      )}
+
+      {!finished && target && (
+        <PhotoHint target={target} used={Boolean(game.hintUsed)} onUse={onHint} />
       )}
 
       <div className="guess-list">

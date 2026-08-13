@@ -1,56 +1,11 @@
-import { useEffect, useState } from 'react';
 import { SIZE_LABELS, type SizeBucket, type Species } from '../game/types';
+import { useWikipediaSummary } from '../useWikipediaSummary';
 
 interface Props {
   species: Species;
   won: boolean;
   guessCount: number;
   sizeRanges: Record<SizeBucket, string>;
-}
-
-interface Summary {
-  src?: string;
-  pageUrl: string;
-  extract?: string;
-}
-
-/**
- * The photo and the blurb both come from Wikipedia at reveal time rather than
- * being baked into the dataset: image URLs rot, fetching on demand keeps the
- * shipped file small, and at 1,200 species there is no hand-written trivia to
- * ship anyway. A failure here is silent — the card simply renders without them.
- */
-function useWikipediaSummary(title: string): Summary | null {
-  const [summary, setSummary] = useState<Summary | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setSummary(null);
-
-    const endpoint = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(
-      title.replace(/ /g, '_'),
-    )}`;
-
-    fetch(endpoint)
-      .then((response) => (response.ok ? response.json() : null))
-      .then((data) => {
-        if (cancelled || !data) return;
-        setSummary({
-          src: data.thumbnail?.source ?? data.originalimage?.source,
-          pageUrl: data.content_urls?.desktop?.page ?? `https://en.wikipedia.org/wiki/${title}`,
-          extract: data.extract,
-        });
-      })
-      .catch(() => {
-        /* offline or blocked; the card works without them */
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [title]);
-
-  return summary;
 }
 
 function massLabel(grams: number): string {
@@ -117,7 +72,7 @@ export function RevealCard({ species, won, guessCount, sizeRanges }: Props) {
         </dl>
       </div>
 
-      {summary && (
+      {(summary?.src || blurb) && summary && (
         <p className="photo-credit">
           Photo and article from{' '}
           <a href={summary.pageUrl} target="_blank" rel="noreferrer noopener">

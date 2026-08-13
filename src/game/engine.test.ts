@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_GUESSES } from './clues';
-import { giveUp, guessesRemaining, newGame, submitGuess } from './engine';
+import { giveUp, guessesRemaining, markHintUsed, newGame, submitGuess } from './engine';
 import { daysSinceLaunch, msUntilRollover, puzzleNumber, targetForDate, todayUTC } from './daily';
 import type { GameState, Species, SpeciesFile } from './types';
 
@@ -119,6 +119,30 @@ describe('submitGuess with no guess cap', () => {
     const repeat = submitGuess(played, species(1), target, null);
     expect(repeat.kind).toBe('duplicate');
     expect(repeat.state.guesses).toHaveLength(3);
+  });
+});
+
+describe('photo hint', () => {
+  it('records that the hint was taken', () => {
+    const state = markHintUsed(newGame('2026-08-10'));
+    expect(state.hintUsed).toBe(true);
+  });
+
+  it('is unset until asked for', () => {
+    expect(newGame('2026-08-10').hintUsed).toBeUndefined();
+  });
+
+  it('is idempotent and costs no guess', () => {
+    const once = markHintUsed(newGame('2026-08-10'));
+    expect(markHintUsed(once)).toBe(once);
+    expect(once.guesses).toHaveLength(0);
+    expect(guessesRemaining(once, MAX_GUESSES)).toBe(MAX_GUESSES);
+  });
+
+  it('survives a guess, so a refresh keeps the photo visible', () => {
+    const outcome = submitGuess(markHintUsed(newGame('2026-08-10')), species(1), target, null);
+    if (outcome.kind !== 'accepted') throw new Error('expected acceptance');
+    expect(outcome.state.hintUsed).toBe(true);
   });
 });
 

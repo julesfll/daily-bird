@@ -54,6 +54,15 @@ export function submitGuess(
   return { kind: 'accepted', state: { ...state, guesses, status }, result };
 }
 
+/**
+ * Reveal the photo. Costs no guess — it is recorded rather than penalised, and
+ * surfaces in the share text so a shared result stays honest.
+ */
+export function markHintUsed(state: GameState): GameState {
+  if (state.hintUsed) return state;
+  return { ...state, hintUsed: true };
+}
+
 /** Give up: ends the game as a loss without adding a guess. */
 export function giveUp(state: GameState): GameState {
   if (state.status !== 'in_progress') return state;
