@@ -113,7 +113,14 @@ export function ClueRow({ result, species, showColor, sizeRanges }: Props) {
         </span>
         <span className="sci">{species.sci}</span>
       </div>
-      <div className="chips" style={{ ['--chip-count' as string]: showColor ? 5 : 4 }}>
+      <div
+        className="chips"
+        style={{
+          ['--chip-count' as string]: showColor ? 5 : 4,
+          // Four clues tile as 2x2 rather than 3+1, which leaves a gap.
+          ['--chip-cols-narrow' as string]: showColor ? 3 : 2,
+        }}
+      >
         {showColor && matchChip('Colour', species.color, result.color.match)}
         <Chip
           label="Size"

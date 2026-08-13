@@ -277,8 +277,17 @@ def main() -> int:
 
     # Shuffle indices, not the list, so `species` stays in a readable order and
     # only pool_order encodes the daily sequence.
-    pool_order = list(range(len(species)))
+    #
+    # Every species is guessable, but a source may mark only its better-known
+    # ones as answer-eligible: being asked for a bird you could not name is a
+    # bad puzzle, while a long guess list is a good one.
+    pool_order = [i for i, row in enumerate(kept) if row.get("answer", True)]
     random.Random(SHUFFLE_SEED).shuffle(pool_order)
+    if len(pool_order) < len(species):
+        print(
+            f"Answers drawn from the {len(pool_order)} best-known of "
+            f"{len(species)} species; all {len(species)} remain guessable"
+        )
 
     # The colour clue only appears when the data can actually support it.
     has_colour = all(s["color"] for s in species)
@@ -301,7 +310,11 @@ def main() -> int:
 
     size_kb = args.out.stat().st_size / 1024
     print(f"Wrote {len(species)} species to {args.out} ({size_kb:.0f} KB), dropped {dropped}")
-    print(f"Pool gives {len(species)} days of puzzles before it repeats.")
+    years = len(pool_order) / 365
+    print(
+        f"Pool gives {len(pool_order)} days of puzzles "
+        f"({years:.1f} years) before it repeats."
+    )
     report_distribution(species)
     return 0
 

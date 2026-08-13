@@ -23,7 +23,8 @@ describe('shipped dataset', () => {
       expect(s.name, `species ${s.id}`).toBeTruthy();
       expect(s.sci, s.name).toBeTruthy();
       expect(s.family, s.name).toBeTruthy();
-      expect(s.color, s.name).toBeTruthy();
+      // Colour is only present when the dataset can support that clue.
+      if (file.clues.color) expect(s.color, s.name).toBeTruthy();
       expect(s.habitat, s.name).toBeTruthy();
       expect(s.continent, s.name).toBeTruthy();
       expect(s.wiki, s.name).toBeTruthy();
@@ -32,8 +33,11 @@ describe('shipped dataset', () => {
       expect(Math.abs(s.lat), s.name).toBeLessThanOrEqual(90);
       expect(Math.abs(s.lon), s.name).toBeLessThanOrEqual(180);
       expect(s.mass, s.name).toBeGreaterThan(0);
-      expect(s.reveal.fact, s.name).toBeTruthy();
       expect(s.reveal.status, s.name).toBeTruthy();
+      expect(s.reveal.diet, s.name).toBeTruthy();
+      // reveal.fact is deliberately optional: at pool sizes past a few
+      // hundred there is no hand-written trivia, and the reveal card falls
+      // back to the Wikipedia extract it already fetches for the photo.
     }
   });
 
@@ -52,10 +56,19 @@ describe('shipped dataset', () => {
     }
   });
 
-  it('visits every species exactly once before repeating', () => {
-    expect([...new Set(file.poolOrder)].length).toBe(file.species.length);
-    expect(Math.min(...file.poolOrder)).toBe(0);
-    expect(Math.max(...file.poolOrder)).toBe(file.species.length - 1);
+  it('never repeats an answer before the sequence wraps', () => {
+    expect([...new Set(file.poolOrder)].length).toBe(file.poolOrder.length);
+  });
+
+  it('draws answers from the shipped species', () => {
+    // Not every species need be answer-eligible — a large pool keeps obscure
+    // birds guessable without ever making one the puzzle — but every entry in
+    // the order must point at a real species.
+    expect(file.poolOrder.length).toBeGreaterThan(100);
+    expect(file.poolOrder.length).toBeLessThanOrEqual(file.species.length);
+    for (const index of file.poolOrder) {
+      expect(file.species[index]).toBeDefined();
+    }
   });
 
   it('resolves a real bird for a year of dates', () => {

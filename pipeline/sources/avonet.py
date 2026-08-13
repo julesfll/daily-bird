@@ -28,6 +28,13 @@ ONLINE = RAW / "online_data.json"
 
 POOL_SIZE = 1200
 
+# Every species in the pool can be *guessed*, but only the best-known ones are
+# ever the *answer*. A puzzle whose answer is the Lesser Sooty Owl is not
+# solvable by anyone who is not already an ornithologist, while a rich guess
+# list costs nothing and makes the autocomplete far more satisfying.
+# Raise this for more runway at the cost of harder days.
+ANSWER_POOL = 600
+
 # Ranges past this get the compass sub-clue suppressed; see build_dataset.py
 # for why 35M rather than the 15M the original plan guessed at.
 WIDE_RANGE_KM2 = 35_000_000
@@ -160,6 +167,8 @@ def build_rows(pool_size: int = POOL_SIZE) -> list[dict[str, Any]]:
 
         rows.append(
             {
+                # Rank is by pageviews, so the earliest rows are the best known.
+                "answer": len(rows) < ANSWER_POOL,
                 "sci": record["sci"],
                 "name": display_name(record["wiki"]),
                 "family": family,
@@ -174,14 +183,17 @@ def build_rows(pool_size: int = POOL_SIZE) -> list[dict[str, Any]]:
                 "migration": MIGRATION.get(
                     int(traits["migration"]) if traits["migration"] else 0, "Unknown"
                 ),
-                "status": record.get("status") or "Not assessed",
+                # Wikidata returns these lowercase ("least concern"); the Red
+                # List writes them as titles.
+                "status": (record.get("status") or "Not assessed").title(),
                 # No hand-written trivia at this scale; the reveal card falls
                 # back to the Wikipedia extract it already fetches for the photo.
                 "fact": "",
             }
         )
 
-    print(f"  selected {len(rows)} species")
+    answers = sum(1 for r in rows if r["answer"])
+    print(f"  selected {len(rows)} species, {answers} of them answer-eligible")
     print(f"  skipped: {dict(skipped)}")
     if unmapped:
         print(f"  {len(unmapped)} unmapped families cost {sum(unmapped.values())} species:")

@@ -34,7 +34,9 @@ FAMILY_LABELS: dict[str, str] = {
     # --- ratites ---
     "Struthionidae": "Ostriches",
     "Rheidae": "Rheas",
-    "Casuariidae": "Cassowaries",
+    # AVONET files the emu here with the cassowaries. Taxonomically fine, but
+    # a chip reading "Cassowaries" under Emu is not.
+    "Casuariidae": "Emu & Cassowaries",
     "Dromaiidae": "Emu",
     "Apterygidae": "Kiwis",
     # --- waterfowl and waterbirds ---
