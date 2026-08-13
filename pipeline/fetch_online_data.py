@@ -85,6 +85,14 @@ def http_get(url: str, *, timeout: int = 120, retries: int = 4) -> bytes:
 # ---------------------------------------------------------------- AVONET
 
 
+def to_float(value: Any) -> float | None:
+    """AVONET writes missing numbers as the string 'NA', not as a blank."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def load_species() -> list[dict[str, Any]]:
     import openpyxl
 
@@ -95,17 +103,18 @@ def load_species() -> list[dict[str, Any]]:
     at = {name: i for i, name in enumerate(header)}
 
     out = []
+    missing = 0
     for row in rows:
         name = row[at["Species1"]]
         if not name:
             continue
-        out.append(
-            {
-                "sci": name,
-                "lat": row[at["Centroid.Latitude"]],
-                "lon": row[at["Centroid.Longitude"]],
-            }
-        )
+        lat = to_float(row[at["Centroid.Latitude"]])
+        lon = to_float(row[at["Centroid.Longitude"]])
+        if lat is None or lon is None:
+            missing += 1
+        out.append({"sci": name, "lat": lat, "lon": lon})
+    if missing:
+        print(f"  {missing} species have no usable range centroid")
     return out
 
 
@@ -238,27 +247,44 @@ def build_continents():
     raise RuntimeError("could not load any Natural Earth boundaries")
 
 
-def assign_continents(species: Iterable[dict[str, Any]]) -> None:
+def assign_continents(species: list[dict[str, Any]]) -> None:
     from shapely.geometry import Point
     from shapely.prepared import prep
 
     polygons = build_continents()
     prepared = {name: prep(geom) for name, geom in polygons.items()}
 
+    failures = 0
     for row in species:
+        row["continent"] = None
         if row["lat"] is None or row["lon"] is None:
-            row["continent"] = None
             continue
-        point = Point(row["lon"], row["lat"])
-        hit = next((n for n, g in prepared.items() if g.contains(point)), None)
-        if hit is None:
-            # Seabirds and island endemics routinely centre on open water;
-            # fall back to whichever landmass is closest.
-            hit = min(polygons, key=lambda n: polygons[n].distance(point))
-        row["continent"] = hit
+        # One unmappable centroid must never cost the whole crawl.
+        try:
+            point = Point(row["lon"], row["lat"])
+            hit = next((n for n, g in prepared.items() if g.contains(point)), None)
+            if hit is None:
+                # Seabirds and island endemics routinely centre on open water;
+                # fall back to whichever landmass is closest.
+                hit = min(polygons, key=lambda n: polygons[n].distance(point))
+            row["continent"] = hit
+        except Exception as exc:
+            failures += 1
+            if failures <= 5:
+                print(f"  could not place {row['sci']} at ({row['lat']}, {row['lon']}): {exc}")
+    placed = sum(1 for r in species if r["continent"])
+    print(f"  placed {placed}/{len(species)}, {failures} failed")
 
 
 # ---------------------------------------------------------------- main
+
+
+def write_output(species: list[dict[str, Any]]) -> None:
+    """Most-viewed first, so the pool cutoff is just a slice of the file."""
+    species.sort(key=lambda r: r.get("views", 0), reverse=True)
+    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    OUTPUT.write_text(json.dumps(species, ensure_ascii=False, indent=None), encoding="utf-8")
+    print(f"  wrote {OUTPUT.name} ({OUTPUT.stat().st_size / 1024:.0f} KB)")
 
 
 def main() -> int:
@@ -288,12 +314,14 @@ def main() -> int:
         for row in species:
             row["views"] = 0
 
+    # Everything above this line is half an hour of network work. Write it out
+    # before doing anything else, so a bug in a later step costs a rerun of
+    # that step and not of the entire crawl.
+    write_output(species)
+
     print("Continents…")
     assign_continents(species)
-
-    species.sort(key=lambda r: r.get("views", 0), reverse=True)
-    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT.write_text(json.dumps(species, ensure_ascii=False, indent=None), encoding="utf-8")
+    write_output(species)
 
     ranked = [r for r in species if r.get("views")]
     print(f"\nwrote {OUTPUT} ({OUTPUT.stat().st_size / 1024:.0f} KB)")

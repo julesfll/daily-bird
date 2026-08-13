@@ -32,9 +32,11 @@ jobs:
 
       - run: pip install openpyxl shapely pyshp
 
-      # Lets a re-run pick up where a timed-out or failed one stopped.
+      # Restore and save are split deliberately: actions/cache skips its save
+      # step when the job fails, which is exactly when half an hour of fetched
+      # pageviews is most worth keeping.
       - name: Restore crawl cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: pipeline/.cache
           key: crawl-${{ github.run_id }}
@@ -45,8 +47,15 @@ jobs:
           python3 pipeline/fetch_online_data.py \
             ${{ inputs.limit && format('--limit {0}', inputs.limit) || '' }}
 
-      # Belt and braces: an hour of crawling should survive anything that goes
-      # wrong with the commit below.
+      - name: Save crawl cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: pipeline/.cache
+          key: crawl-${{ github.run_id }}
+
+      # Belt and braces: half an hour of crawling should survive anything that
+      # goes wrong with the commit below.
       - name: Upload the result as an artifact
         if: always()
         uses: actions/upload-artifact@v4
