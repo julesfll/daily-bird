@@ -58,10 +58,12 @@ NATURAL_EARTH = [
 
 PAGEVIEW_START, PAGEVIEW_END = "2025010100", "2025123100"
 SPARQL_BATCH = 120
-PAGEVIEW_WORKERS = 8
+# Eight workers got the pageviews API throttling in bursts. Four keeps the
+# whole run comfortably inside its limits and still finishes in minutes.
+PAGEVIEW_WORKERS = 4
 
 
-def http_get(url: str, *, timeout: int = 120, retries: int = 4) -> bytes:
+def http_get(url: str, *, timeout: int = 120, retries: int = 6) -> bytes:
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     delay = 2.0
     for attempt in range(retries):
@@ -74,6 +76,17 @@ def http_get(url: str, *, timeout: int = 120, retries: int = 4) -> bytes:
                 raise
             if attempt == retries - 1:
                 raise
+            # Being throttled is the normal case at this volume. Wait as long
+            # as the server asks rather than burning a retry immediately.
+            if exc.code == 429:
+                retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                try:
+                    wait = float(retry_after) if retry_after else delay
+                except ValueError:
+                    wait = delay
+                time.sleep(min(max(wait, delay), 60))
+                delay *= 2
+                continue
         except Exception:
             if attempt == retries - 1:
                 raise
@@ -177,33 +190,56 @@ def fetch_wikidata(names: list[str]) -> dict[str, dict[str, str]]:
 
 
 def fetch_pageviews(titles: list[str]) -> dict[str, int]:
+    """Twelve-month view totals per article.
+
+    Only successful lookups are cached. A failed request must never be stored
+    as a zero: doing so silently demotes the bird to the bottom of the ranking
+    and caches that verdict forever. An earlier run recorded 5,604 throttled
+    requests as zero views, which put Blue Jay and American Robin below
+    species nobody has heard of.
+    """
     store = CACHE / "pageviews.json"
     views: dict[str, int] = {}
     if store.exists():
         views = json.loads(store.read_text(encoding="utf-8"))
+        # Zeros in an existing cache are almost certainly old failures; a real
+        # article with no views at all is vanishingly rare, so retry them.
+        views = {title: count for title, count in views.items() if count > 0}
 
     todo = [t for t in titles if t not in views]
     print(f"  pageviews: {len(views)} cached, {len(todo)} to fetch")
 
-    def one(title: str) -> tuple[str, int]:
+    failures: list[str] = []
+
+    def one(title: str) -> tuple[str, int | None]:
         quoted = urllib.parse.quote(title.replace(" ", "_"), safe="")
         url = PAGEVIEWS.format(title=quoted, start=PAGEVIEW_START, end=PAGEVIEW_END)
         try:
-            payload = json.loads(http_get(url, timeout=60, retries=2))
+            payload = json.loads(http_get(url, timeout=60))
             return title, sum(item["views"] for item in payload.get("items", []))
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return title, 0  # article genuinely has no pageview record
+            return title, None
         except Exception:
-            return title, 0  # missing or renamed article simply ranks last
+            return title, None
 
     done = 0
     with ThreadPoolExecutor(max_workers=PAGEVIEW_WORKERS) as pool:
         for title, total in pool.map(one, todo):
-            views[title] = total
             done += 1
+            if total is None:
+                failures.append(title)
+            else:
+                views[title] = total
             if done % 500 == 0:
-                print(f"  pageviews {done}/{len(todo)}")
+                print(f"  pageviews {done}/{len(todo)} ({len(failures)} failed)")
                 store.write_text(json.dumps(views), encoding="utf-8")
 
     store.write_text(json.dumps(views), encoding="utf-8")
+    if failures:
+        print(f"  WARNING: {len(failures)} lookups failed and were left uncached")
+        print(f"    e.g. {failures[:5]}")
     return views
 
 
